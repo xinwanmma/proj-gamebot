@@ -1,0 +1,28 @@
+# ===== 核心框架 =====
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0      # 智谱 API 兼容 OpenAI 格式，复用此包
+
+# ===== PDF 解析 =====
+pdfplumber>=0.11.0           # 中文 PDF 友好，保留布局
+pypdf>=4.0.0                 # 兜底
+
+# ===== 向量库 =====
+chromadb>=0.5.0
+
+# ===== 本地 Embedding 模型 =====
+sentence-transformers>=3.0.0
+torch>=2.0.0                 # sentence-transformers 依赖
+transformers>=4.40.0
+
+# ===== Web UI =====
+gradio>=4.40.0
+
+# ===== 工具 =====
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# ===== LangGraph Checkpointer 持久化 =====
+langgraph-checkpoint-sqlite>=2.0.0

@@ -1,0 +1,16 @@
+{"query": "HQ 是什么？它和补给有什么关系？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["HQ", "补给"], "expected_points": ["HQ 是 Headquarters（指挥部）的缩写", "HQ 提供补给范围 / 指挥范围"]}
+{"query": "补给线是怎么判定的？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["补给线", "Supply"], "expected_points": ["补给线连接到补给源", "每支部队需要能追溯到补给源"]}
+{"query": "桥梁被炸了怎么修？需要什么单位？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["桥", "Engineer", "工兵"], "expected_points": ["需要 Engineer / 工兵单位", "工兵在桥上执行修复动作"]}
+{"query": "Reserve 模式有什么用？什么时候开启？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["Reserve", "预备"], "expected_points": ["Reserve 模式下部队在敌方回合不会触发 OP fire", "用于保存步数 / 防御"]}
+{"query": "Encirclement（包围）是怎么判定的？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["Encirclement", "包围"], "expected_points": ["部队四面被敌方控制即陷入包围", "包围状态下补给线被切断"]}
+{"query": "部队怎么升级？经验有什么用？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["Upgrade", "升级", "Experience"], "expected_points": ["通过战斗获得经验", "升级提升战斗力和防御"]}
+{"query": "铁路移动是怎么算的？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["铁路", "Rail"], "expected_points": ["沿铁路移动消耗移动力减半或免费", "需要铁路连通"]}
+{"query": "渡河有什么惩罚？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["渡河", "River"], "expected_points": ["渡河消耗额外移动力", "可能受到敌方火力压制"]}
+{"query": "Step 损失是什么意思？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["Step", "步数"], "expected_points": ["Step 是部队的体力单位", "损失 Step 会降低战斗力"]}
+{"query": "怎么获得 Stephens 这种特殊单位？", "intent": "rule", "gt_source": null, "gt_page": null, "gt_keywords": ["Stephens", "特殊", "Hero"], "expected_points": ["通过剧本特定条件触发", "特殊英雄单位有独特能力"]}
+{"query": "Barbarossa DLC 第 3 回合德军会得到哪些援军？", "intent": "scenario", "gt_source": null, "gt_page": null, "gt_keywords": ["Barbarossa", "援军"], "expected_points": ["剧本图表中有详细援军表", "建议直接查阅剧本 PDF"]}
+{"query": "Stalingrad 苏军胜利条件是什么？", "intent": "scenario", "gt_source": null, "gt_page": null, "gt_keywords": ["Stalingrad", "胜利条件"], "expected_points": ["守卫特定据点", "歼灭德军一定比例"]}
+{"query": "我玩 Kursk，苏军开局应该怎么布阵？", "intent": "tactics", "gt_source": null, "gt_page": null, "gt_keywords": ["Kursk"], "expected_points": ["利用纵深防御", "把强力部队放在二线"]}
+{"query": "面对德军的虎式坦克，苏军应该怎么应对？", "intent": "tactics", "gt_source": null, "gt_page": null, "gt_keywords": ["Tiger", "虎式"], "expected_points": ["避免正面硬刚", "用侧袭或包围"]}
+{"query": "包围圈怎么破？部队被围了怎么办？", "intent": "tactics", "gt_source": null, "gt_page": null, "gt_keywords": ["包围"], "expected_points": ["打通一条到友军的补给线", "或就地固守等待救援"]}
+{"query": "你好，你能做什么？", "intent": "chitchat", "gt_source": null, "gt_page": null, "gt_keywords": [], "expected_points": ["友好回应", "介绍自己能回答游戏相关问题"]}
