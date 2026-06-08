@@ -7,6 +7,13 @@ Gradio Web UI —— 游戏助手聊天界面。
 浏览器打开 http://127.0.0.1:7860 即可使用。
 支持打字机效果（token 级流式输出）。
 """
+
+# 强制离线模式：HuggingFace 模型已本地缓存，不走网络
+# 必须在任何 HF/transformers 导入之前设置
+import os
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
 import sys
 import uuid
 from pathlib import Path
@@ -60,17 +67,18 @@ NODE_LABELS = {
 
 def chat_stream(user_input: str, history, session_id: str | None = None):
     """
-    聊天生成器：流式输出回答。
+    聊天生成器：流式输出回答，同时返回 session_id 供 Gradio State 持久化。
     
     参数：
         user_input: 用户当前输入
         history:    Gradio 注入的聊天历史
         session_id: Gradio State，区分不同浏览器会话
     
-    用 yield 逐步返回文本，实现打字机效果。
+    用 yield 逐步返回 (文本, session_id) 元组，实现打字机效果。
+    第一次调用时生成 session_id，之后 Gr.State 记住它，保证多轮对话共用同一 thread。
     """
     if not user_input or not user_input.strip():
-        yield "(请输入问题)"
+        yield "(请输入问题)", session_id or ""
         return
 
     # 每个浏览器会话用独立 thread_id，多用户不串历史
@@ -96,7 +104,7 @@ def chat_stream(user_input: str, history, session_id: str | None = None):
                 if label and label not in progress:
                     progress.append(label)
                     if not answer_parts:
-                        yield "\n\n".join(f"_{p}_" for p in progress)
+                        yield "\n\n".join(f"_{p}_" for p in progress), session_id
 
                 # 记下检索结果（用于末尾参考来源）
                 if isinstance(state_update, dict):
@@ -113,7 +121,7 @@ def chat_stream(user_input: str, history, session_id: str | None = None):
                 if token and (meta or {}).get("langgraph_node") == "answer":
                     answer_parts.append(token)
                     progress_md = "\n\n".join(f"_{p}_" for p in progress) + "\n\n" if progress else ""
-                    yield progress_md + "".join(answer_parts) + "▌"
+                    yield progress_md + "".join(answer_parts) + "▌", session_id
             except (TypeError, ValueError):
                 pass
 
@@ -132,7 +140,7 @@ def chat_stream(user_input: str, history, session_id: str | None = None):
         if refs:
             result += f"\n\n<details><summary>📚 参考来源</summary>\n\n{refs}\n\n</details>"
 
-    yield result
+    yield result, session_id
 
 
 def _format_refs(docs) -> str:
@@ -173,15 +181,15 @@ def respond(user_msg, history, sid):
     history = history or []
     history.append({"role": "user", "content": user_msg})
     history.append({"role": "assistant", "content": ""})
-    for chunk in chat_stream(user_msg, history, sid):
+    for chunk, new_sid in chat_stream(user_msg, history, sid):
         history[-1]["content"] = chunk
-        yield history, sid, ""
+        yield history, new_sid, ""
 
-with gr.Blocks(title=TITLE, theme=gr.themes.Soft()) as demo:
+with gr.Blocks(title=TITLE) as demo:
     gr.Markdown(f"# {TITLE}\n{DESC}")
 
     session_state = gr.State(None)          # 每个浏览器会话独立
-    chatbot = gr.Chatbot(height=600, type="messages")
+    chatbot = gr.Chatbot(height=600)
 
     with gr.Row():
         user_input = gr.Textbox(

@@ -55,10 +55,10 @@ def get_tactics_llm() -> ChatOpenAI:
 
 # 离线模式：模型已下载到本地缓存时，不联网检查更新
 # （国内访问 huggingface.co 不稳定，离线模式避免卡住）
+# 注意：必须用强制赋值（=）而非 setdefault，否则被 transformers 内部初始化抢先
 import os
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 @lru_cache(maxsize=1)
 def get_embeddings() -> HuggingFaceEmbeddings:
