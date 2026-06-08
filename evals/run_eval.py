@@ -1,198 +1,128 @@
 """
-评估脚本 —— 测试检索和回答质量。
+评估脚本：跑全量 dataset.jsonl，输出 Recall@K 表格 + LLM-as-Judge 评分。
 
 用法：
-    python -m evals.run_eval                    # 全量跑
-    python -m evals.run_eval --limit 5           # 只跑前 5 条
-    python -m evals.run_eval --skip-judge        # 跳过 LLM 评分（省 token）
-    python -m evals.run_eval --rerank            # 启用 reranker 后对比
+    python -m evals.run_eval                  # 跑全部样本
+    python -m evals.run_eval --limit 5        # 只跑前 5 条
+    python -m evals.run_eval --skip-judge     # 只算检索指标，跳过 LLM 评分
+    python -m evals.run_eval --rerank         # 启用 reranker 后再评估（需先实现 reranker）
 
 输出：
-    evals/results.jsonl  ← 每条样本一行，含 recall 和 judge 分数
-    控制台汇总          ← 平均 Recall@K、平均总评
+    evals/results.jsonl   —— 每条样本一行，含 recall@1/3/5、judge 分数
+    控制台汇总            —— 平均 Recall@K、平均总评
 """
+from __future__ import annotations
+
 import argparse
 import json
 import sys
 import time
 from pathlib import Path
 
-# 确保能找到 gamebot 包
+# 让脚本可直接运行
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from gamebot.llm import get_embeddings, get_reranker, get_llm
-from gamebot.pipeline import _get_vectorstore, build_graph
+from src.ingest import get_or_build_vectorstore  # noqa: E402
+from src.llm import content_to_str, make_llm  # noqa: E402
+from src.state import AgentState  # noqa: E402
 
-# ===== 评测数据集 =====
+from evals.metrics import llm_judge, recall_at_k  # noqa: E402
+
+
 DATASET_PATH = Path(__file__).parent / "dataset.jsonl"
 RESULTS_PATH = Path(__file__).parent / "results.jsonl"
 
 
-# ==================== 指标一：Recall@K ====================
-
-def recall_at_k(docs, sample, k):
-    """
-    检索召回率：top-K 里有没有找到相关文档？
-    返回 0（没找到）或 1（找到了）。
-    
-    判定规则：
-    1. 如果样本标注了 gt_source（文件名），精确匹配 metadata
-    2. 否则用 gt_keywords，只要一个关键词出现在文本中就算命中
-    """
-    top_k = docs[:k]
-    gt_source = sample.get("gt_source")
-    gt_keywords = sample.get("gt_keywords") or []
-
-    for doc in top_k:
-        if gt_source:
-            # 精确匹配：文件名 + 页码
-            meta = doc.metadata or {}
-            if meta.get("source") == gt_source:
-                gt_page = sample.get("gt_page")
-                if gt_page is None or meta.get("page") == gt_page:
-                    return 1
-        elif gt_keywords:
-            # 模糊匹配：任何一个关键词出现在文本中就命中
-            text = (doc.page_content or "").lower()
-            if any(kw.lower() in text for kw in gt_keywords):
-                return 1
-    return 0
-
-
-# ==================== 指标二：LLM-as-Judge ====================
-
-JUDGE_PROMPT = """你是一个严格的评估员。
-
-【用户问题】
-{query}
-
-【期望回答要点】
-{expected_points}
-
-【AI 实际回答】
-{answer}
-
-请从以下 4 个维度打分（每项 1-5 分）：
-1. 相关性：回答是否针对问题
-2. 事实一致性：是否与要点一致，没有编造
-3. 完整性：是否覆盖了所有要点
-4. 拒答合理性：资料不足时是否坦诚说明
-
-【输出格式】
-相关性: <1-5>
-事实一致性: <1-5>
-完整性: <1-5>
-拒答合理性: <1-5>
-总评: <1-5>
-理由: <一句话>
-"""
-
-def llm_judge(query, answer, expected_points):
-    """让 LLM 给回答打分。"""
-    points_str = "\n".join(f"- {p}" for p in expected_points) or "(无明确要点)"
-    prompt = JUDGE_PROMPT.format(
-        query=query,
-        expected_points=points_str,
-        answer=answer or "(空回答)",
-    )
-    # 评估用低温度，保证打分稳定
-    resp = get_llm(0.0).invoke(prompt)
-    text = str(resp.content).strip()
-
-    # 解析分数
-    result = {}
-    for cn, en in [("相关性","relevance"),("事实一致性","factuality"),
-                    ("完整性","completeness"),("拒答合理性","refusal"),("总评","overall")]:
-        for line in text.split("\n"):
-            if line.strip().startswith(cn):
-                for tok in line.split(":")[-1].split():
-                    if tok.isdigit():
-                        result[en] = int(tok)
-                        break
-                break
-        if en not in result:
-            result[en] = 0
-
-    # 抽取理由
-    result["reason"] = ""
-    for line in text.split("\n"):
-        if line.strip().startswith("理由"):
-            result["reason"] = line.split(":", 1)[-1].strip()
-            break
-    return result
-
-
-# ==================== 主流程 ====================
-
-def load_dataset(limit=None):
-    """加载评测集。"""
-    samples = []
-    with open(DATASET_PATH, encoding="utf-8") as f:
+def load_dataset(limit: int | None = None) -> list[dict]:
+    """加载评估集。"""
+    samples: list[dict] = []
+    with open(DATASET_PATH, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
-                samples.append(json.loads(line))
-    return samples[:limit] if limit else samples
+            if not line:
+                continue
+            samples.append(json.loads(line))
+    if limit:
+        samples = samples[:limit]
+    return samples
 
 
-def run_one(sample, vs, judge_llm=None, use_rerank=False):
-    """跑一条样本：检索 → 可选重排 → 可选 LLM 评分。"""
+def run_one(sample: dict, vs, judge_llm=None, use_rerank: bool = False) -> dict:
+    """对单条样本跑：检索 + （可选）重排 + （可选）LLM 评分。"""
     query = sample["query"]
     t0 = time.time()
 
-    # 1. 检索 top-20
-    docs = vs.similarity_search(query, k=20)
+    # 1) 检索 —— 取 top-20 粗排，便于 Recall@5/10 评估
+    candidate_k = 20
+    docs = vs.similarity_search(query, k=candidate_k)
 
-    # 2. 可选：reranker 精排
+    # 2) （可选）reranker 重排
     if use_rerank:
-        reranker = get_reranker()
-        if reranker:
-            docs = reranker.rerank(query, docs, top_k=10)
+        try:
+            from src.reranker import get_reranker
+            docs = get_reranker().rerank(query, docs, top_k=10)
+        except Exception as e:
+            print(f"  [warn] rerank 失败，回退到纯检索: {e}")
 
-    # 3. 算 Recall@K
-    result = {
-        "query": query,
-        "intent": sample.get("intent"),
-        "recall@1": recall_at_k(docs, sample, 1),
-        "recall@3": recall_at_k(docs, sample, 3),
-        "recall@5": recall_at_k(docs, sample, 5),
-        "recall@10": recall_at_k(docs, sample, 10),
-        "answer": "",
-        "judge": {},
-        "elapsed_s": round(time.time() - t0, 2),
-    }
+    # 3) Recall@K
+    recall1 = recall_at_k(docs, sample, k=1)
+    recall3 = recall_at_k(docs, sample, k=3)
+    recall5 = recall_at_k(docs, sample, k=5)
+    recall10 = recall_at_k(docs, sample, k=10)
 
-    # 4. 可选：端到端回答 + LLM 评分
+    # 4) （可选）端到端回答 —— 走 graph 拿 answer
+    answer = ""
     if judge_llm is not None:
         try:
-            g = build_graph()
-            r = g.invoke(
+            from src.graph import build_graph
+            graph = build_graph()
+            # 评估时每条样本用独立 thread，避免历史串扰
+            result = graph.invoke(
                 {"query": query},
                 config={"configurable": {"thread_id": f"eval-{time.time_ns()}"}},
             )
-            answer = r.get("answer", "")
-            result["answer"] = answer
-            result["judge"] = llm_judge(query, answer, sample.get("expected_points", []))
+            answer = result.get("answer", "")
         except Exception as e:
-            result["answer"] = f"(生成失败: {e})"
+            answer = f"(生成失败: {e})"
 
-    return result
+    # 5) LLM-as-Judge
+    judge_scores: dict = {}
+    if judge_llm is not None and answer:
+        judge_scores = llm_judge(
+            query=query,
+            answer=answer,
+            expected_points=sample.get("expected_points", []),
+            llm=judge_llm,
+        )
+
+    elapsed = round(time.time() - t0, 2)
+    return {
+        "query": query,
+        "intent": sample.get("intent"),
+        "recall@1": recall1,
+        "recall@3": recall3,
+        "recall@5": recall5,
+        "recall@10": recall10,
+        "answer": answer,
+        "judge": judge_scores,
+        "elapsed_s": elapsed,
+    }
 
 
-def print_summary(results):
-    """打印汇总。"""
+def print_summary(results: list[dict]) -> None:
+    """控制台打印汇总指标。"""
     n = len(results)
     if n == 0:
         print("(无样本)")
         return
 
-    def avg(field):
+    def avg(field: str) -> float:
         vals = [r.get(field, 0) for r in results]
         return round(sum(vals) / n, 3)
 
-    print(f"\n{'='*50}")
-    print(f"评估汇总（共 {n} 条）")
-    print(f"{'='*50}")
+    print("\n" + "=" * 60)
+    print(f"评估汇总（共 {n} 条样本）")
+    print("=" * 60)
     print(f"Recall@1  = {avg('recall@1')}")
     print(f"Recall@3  = {avg('recall@3')}")
     print(f"Recall@5  = {avg('recall@5')}")
@@ -200,50 +130,55 @@ def print_summary(results):
 
     judged = [r for r in results if r.get("judge")]
     if judged:
-        print(f"{'-'*50}")
-        print(f"LLM-as-Judge（{len(judged)} 条有效）")
-        for cn, en in [("相关性","relevance"),("事实一致性","factuality"),
-                        ("完整性","completeness"),("拒答合理性","refusal"),("总评","overall")]:
-            vals = [r["judge"].get(en, 0) for r in judged if isinstance(r["judge"].get(en), int)]
-            print(f"  {cn}: {round(sum(vals)/len(vals), 3)}" if vals else f"  {cn}: -")
-    print(f"{'='*50}")
+        nj = len(judged)
+
+        def javg(field: str) -> float:
+            vals = [r["judge"].get(field, 0) for r in judged if isinstance(r["judge"].get(field), int)]
+            return round(sum(vals) / max(len(vals), 1), 3)
+
+        print("-" * 60)
+        print(f"LLM-as-Judge（共 {nj} 条有效评分）")
+        print(f"  相关性    : {javg('relevance')}")
+        print(f"  事实一致性: {javg('factuality')}")
+        print(f"  完整性    : {javg('completeness')}")
+        print(f"  拒答合理性: {javg('refusal')}")
+        print(f"  总评      : {javg('overall')}")
+    print("=" * 60)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="运行评估")
-    parser.add_argument("--limit", type=int, help="只跑前 N 条")
-    parser.add_argument("--skip-judge", action="store_true", help="跳过 LLM 评分")
-    parser.add_argument("--rerank", action="store_true", help="启用 reranker 后对比")
+    parser = argparse.ArgumentParser(description="运行 gamebot 评估")
+    parser.add_argument("--limit", type=int, default=None, help="只跑前 N 条样本")
+    parser.add_argument("--skip-judge", action="store_true", help="跳过 LLM-as-Judge")
+    parser.add_argument("--rerank", action="store_true", help="启用 reranker 后再评估")
     args = parser.parse_args()
 
-    # 加载数据集
+    print("[Eval] 加载评估集 ...")
     samples = load_dataset(args.limit)
-    print(f"评测集: {len(samples)} 条样本")
+    print(f"[Eval] 共 {len(samples)} 条样本")
 
-    # 加载向量库
-    print("加载向量库 ...")
-    vs = _get_vectorstore()
+    print("[Eval] 加载向量库 ...")
+    vs = get_or_build_vectorstore()
 
-    # 构造评判 LLM
-    judge_llm = None if args.skip_judge else get_llm(0.0)
+    judge_llm = None if args.skip_judge else make_llm(temperature=0.0)
 
-    # 逐条评测
-    results = []
+    results: list[dict] = []
     for i, sample in enumerate(samples, 1):
         print(f"\n[{i}/{len(samples)}] {sample['query']}")
-        r = run_one(sample, vs, judge_llm, use_rerank=args.rerank)
+        r = run_one(sample, vs, judge_llm=judge_llm, use_rerank=args.rerank)
         results.append(r)
         print(f"  Recall@5={r['recall@5']}  耗时={r['elapsed_s']}s")
         if r.get("judge"):
-            print(f"  Judge 总评={r['judge'].get('overall')}  {r['judge'].get('reason','')}")
+            print(f"  Judge 总评={r['judge'].get('overall')}  理由={r['judge'].get('reason')}")
 
-    # 保存结果
+    # 写入 results.jsonl
     with open(RESULTS_PATH, "w", encoding="utf-8") as f:
         for r in results:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print(f"\n结果已保存: {RESULTS_PATH}")
+    print(f"\n[Eval] 详细结果已写入: {RESULTS_PATH}")
 
     print_summary(results)
+
 
 if __name__ == "__main__":
     main()
