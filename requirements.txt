@@ -20,6 +20,10 @@ transformers>=4.40.0
 # ===== Web UI =====
 gradio>=4.40.0
 
+# ===== OCR（图片型 PDF 识别） =====
+pytesseract>=0.3.10          # Tesseract OCR Python 封装
+pypdfium2>=4.30.0            # PDF 转图片（无需外部依赖）
+
 # ===== 工具 =====
 python-dotenv>=1.0.0
 pydantic>=2.0.0

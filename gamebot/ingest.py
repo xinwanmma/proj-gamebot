@@ -8,6 +8,10 @@ PDF 摄取模块 —— 把 manual/ 下的 PDF 解析、切片、存入 Chroma �
   → 写入 Chroma（本地持久化）
 
 跑一次就行了，后面启动 app 直接加载已有向量库。
+
+支持两种 PDF：
+- 普通文本 PDF（如游戏手册）→ pdfplumber 直接提取文字
+- 图片型 PDF（如剧本图表截图）→ OCR（需安装 Tesseract）
 """
 from pathlib import Path
 
@@ -19,8 +23,67 @@ from . import config
 from .llm import get_embeddings
 
 
+# ===== OCR 支持（图片型 PDF 用） =====
+
+_OCR_AVAILABLE = False  # 标记 Tesseract 是否可用
+_TESSERACT_PATH = None  # tesseract.exe 的路径
+
+# 常见安装位置
+_TESSERACT_CANDIDATES = [
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    str(Path.home() / "AppData/Local/Programs/Tesseract-OCR/tesseract.exe"),
+]
+
+def _init_ocr():
+    """检测 Tesseract 是否已安装，并配置 pytesseract。"""
+    global _OCR_AVAILABLE, _TESSERACT_PATH
+    import subprocess
+    # 先在 PATH 中找
+    try:
+        subprocess.run(["tesseract", "--version"], capture_output=True, timeout=5)
+        _OCR_AVAILABLE = True
+        return
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    # 再在常见安装路径找
+    for path in _TESSERACT_CANDIDATES:
+        if Path(path).exists():
+            _TESSERACT_PATH = path
+            _OCR_AVAILABLE = True
+            return
+    _OCR_AVAILABLE = False
+
+def _ocr_pdf_page(pdf_path: Path, page_index: int) -> str:
+    """
+    对 PDF 的某一页做 OCR 识别。
+    
+    用 pypdfium2 把 PDF 页渲染成图片，
+    再用 pytesseract 识别图片中的文字。
+    """
+    import pypdfium2 as pdfium
+    import pytesseract
+
+    # 配置 tesseract 路径（如果在非标准位置）
+    if _TESSERACT_PATH:
+        pytesseract.pytesseract.tesseract_cmd = _TESSERACT_PATH
+
+    # PDF 页 → 图片（2x 分辨率，提高识别率）
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    page = pdf[page_index]
+    bitmap = page.render(scale=2)
+    img = bitmap.to_pil()
+    pdf.close()
+
+    # OCR 识别（中英文混合）
+    text = pytesseract.image_to_string(img, lang="chi_sim+eng")
+    return text.strip()
+
+
+# ===== 文本 PDF 解析 =====
+
 def load_pdf(path: Path) -> list[Document]:
-    """读取一个 PDF，每页变成一个 Document。"""
+    """读取一个文本型 PDF，每页变成一个 Document。"""
     print(f"  解析: {path.name}")
     docs = []
     with pdfplumber.open(str(path)) as pdf:
@@ -39,20 +102,74 @@ def load_pdf(path: Path) -> list[Document]:
     return docs
 
 
+def load_image_pdf(path: Path) -> list[Document]:
+    """读取一个图片型 PDF，用 OCR 识别每页文字。"""
+    if not _OCR_AVAILABLE:
+        print(f"  ⚠ 跳过（未安装 Tesseract）：{path.name}")
+        return []
+
+    print(f"  OCR 识别: {path.name}")
+    import pypdfium2 as pdfium
+    pdf = pdfium.PdfDocument(str(path))
+    total = len(pdf)
+    pdf.close()
+
+    docs = []
+    for i in range(total):
+        # 显示进度
+        if (i + 1) % 3 == 0 or i == total - 1:
+            print(f"    → 第 {i+1}/{total} 页 ...")
+
+        text = _ocr_pdf_page(path, i)
+        if text:
+            docs.append(Document(
+                page_content=text,
+                metadata={
+                    "source": path.name,
+                    "page": i + 1,
+                    "ocr": True,     # 标记是 OCR 识别的
+                },
+            ))
+    print(f"    → OCR 完成，共 {len(docs)} 页有文字")
+    return docs
+
+
 def get_manual_pdfs() -> list[Path]:
     """获取 manual/ 下所有 PDF 文件。"""
     return sorted(config.MANUAL_DIR.rglob("*.pdf"))
 
 
 def load_all_manuals() -> list[Document]:
-    """读取全部 PDF，每页一篇文章，返回一个大列表。"""
+    """读取全部 PDF，按类型选择解析方式。"""
+    # 启动时检测一次 Tesseract
+    _init_ocr()
+    if _OCR_AVAILABLE:
+        print("[OCR] Tesseract 已就绪，可识别图片型 PDF")
+    else:
+        print("[OCR] Tesseract 未安装，图片型 PDF 将被跳过")
+        print("      安装方法：https://github.com/UB-Mannheim/tesseract/wiki")
+
     all_docs = []
     for pdf_path in get_manual_pdfs():
-        # 跳过剧本图表（图片为主，向量检索效果差）
-        if "scenario" in pdf_path.name.lower():
-            print(f"  跳过剧本图表: {pdf_path.name}")
-            continue
-        all_docs.extend(load_pdf(pdf_path))
+        # 判断是文本 PDF 还是图片 PDF
+        # 用 pdfplumber 试读第一页，没文字就走 OCR
+        has_text = False
+        try:
+            with pdfplumber.open(str(pdf_path)) as pdf:
+                for page in pdf.pages[:2]:  # 看前两页
+                    if (page.extract_text() or "").strip():
+                        has_text = True
+                        break
+        except Exception:
+            pass  # 解析失败当图片 PDF 处理
+
+        if has_text:
+            # 普通文本 PDF
+            all_docs.extend(load_pdf(pdf_path))
+        else:
+            # 图片型 PDF，走 OCR
+            all_docs.extend(load_image_pdf(pdf_path))
+
     print(f"总计 {len(all_docs)} 页")
     return all_docs
 
