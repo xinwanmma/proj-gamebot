@@ -19,7 +19,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import Annotated, TypedDict
 
 from . import config
-from .llm import get_answer_llm, get_embeddings, get_reranker, get_router_llm, get_tactics_llm
+from .llm import content_to_str, get_answer_llm, get_embeddings, get_reranker, get_router_llm, get_tactics_llm
 
 
 # ==================== 1. 状态定义 ====================
@@ -154,7 +154,7 @@ def _answer_with_context(query: str, docs: list[Document],
         context=context, history=history, query=query,
     )
     resp = llm.invoke(prompt)
-    return str(resp.content).strip()
+    return content_to_str(resp.content).strip()
 
 
 # ==================== 4. 向量检索 ====================
@@ -221,7 +221,7 @@ def router_node(state: BotState) -> dict:
     query = state["query"]
     prompt = ROUTER_PROMPT.format(query=query)
     resp = get_router_llm().invoke(prompt)
-    intent = str(resp.content).strip().lower().split()[0]
+    intent = content_to_str(resp.content).strip().lower().split()[0]
 
     # 容错：如果不是合法标签，默认走规则问答
     valid = {"rule", "scenario", "tactics", "chitchat"}

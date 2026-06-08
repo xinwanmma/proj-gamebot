@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import gradio as gr
 
+from gamebot.llm import content_to_str
 from gamebot.pipeline import build_graph
 from gamebot.config import RERANK_ENABLED
 
@@ -116,7 +117,7 @@ def chat_stream(user_input: str, history, session_id: str | None = None):
             # LLM token 流
             try:
                 msg, meta = payload
-                token = str(msg.content)
+                token = content_to_str(msg.content)
                 # 只取回答节点的 token
                 if token and (meta or {}).get("langgraph_node") == "answer":
                     answer_parts.append(token)
@@ -128,10 +129,11 @@ def chat_stream(user_input: str, history, session_id: str | None = None):
     # 最终输出：去掉光标，加上参考来源
     result = "".join(answer_parts)
     if not result:
-        # 流式失败时回退到 invoke
+        # 流式失败时回退到 invoke，用独立的 thread_id 避免污染对话历史
+        fb_id = f"{session_id}-fallback"
         result = graph.invoke(
             {"query": user_input.strip()},
-            config={"configurable": {"thread_id": session_id}},
+            config={"configurable": {"thread_id": fb_id}},
         ).get("answer", "(未生成回答)")
 
     # 附上参考来源

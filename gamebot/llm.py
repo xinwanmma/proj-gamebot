@@ -51,6 +51,29 @@ def get_tactics_llm() -> ChatOpenAI:
     return get_llm(config.LLM_TEMPERATURE_TACTICS)
 
 
+def content_to_str(content) -> str:
+    """
+    把 LLM 返回的 content 统一转成 str。
+    
+    智谱 API 偶尔把 content 返回成 list 格式：
+        [{"type": "text", "text": "..."}]
+    str(content) 会变 Python repr 乱码，这个函数做兼容。
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                t = item.get("text") or item.get("content") or ""
+                if t:
+                    parts.append(str(t))
+        return "".join(parts)
+    return str(content)
+
+
 # ==================== 2. Embedding ====================
 
 # 离线模式：模型已下载到本地缓存时，不联网检查更新
